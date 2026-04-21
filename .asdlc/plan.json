@@ -1,0 +1,70 @@
+{
+  "strategy": "Bottom-Up",
+  "overview": "The task-api has no dependencies and must be built first to provide the backend endpoints. The task-web frontend depends on task-api and is built in phase 2 once the API contract is available.",
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Backend Foundation",
+      "description": "Build the Go REST API service that provides authentication, task, and category management. This has no dependencies and must exist before the frontend can integrate.",
+      "components": [
+        {
+          "name": "task-api",
+          "componentType": "service",
+          "language": "Go (net/http)",
+          "deployment": "Docker",
+          "responsibilities": [
+            "Provide authentication endpoints (register, login, logout, password reset) with bcrypt hashing and session cookies",
+            "Manage CRUD operations for tasks with filtering, completion toggling, and due-date/overdue computation",
+            "Manage per-user categories with unique name enforcement and task reassignment on delete",
+            "Enforce strict per-user data isolation via auth middleware and in-memory thread-safe stores",
+            "Expose /health endpoint and return structured JSON errors"
+          ],
+          "architectureContext": "Core backend service on port 9090 consumed by task-web via HTTPS/JSON with credentialed cookies. Owns all domain state (users, sessions, tasks, categories) in memory behind sync.RWMutex-guarded maps.",
+          "keyConsiderations": [
+            "Implement account lockout (3 failures → 15 min, HTTP 423) with per-email attempt counters",
+            "Use HttpOnly Secure session cookies with 24h expiry and CORS configured for FRONTEND_ORIGIN with credentials",
+            "Structure storage behind an interface so in-memory maps can be swapped for a DB later",
+            "Validate inputs (email regex, password≥8, YYYY-MM-DD date, trimmed non-empty strings)",
+            "Meet \u003c500ms CRUD latency and 100 concurrent user target via efficient locking and indexed lookups"
+          ],
+          "apiContract": "openapi: 3.0.3\ninfo:\n  title: Task API\n  version: 1.0.0\npaths:\n  /health:\n    get:\n      responses:\n        '200': {description: OK}\n  /auth/register:\n    post:\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              required: [email, password]\n              properties:\n                email: {type: string}\n                password: {type: string}\n      responses:\n        '201': {description: Created}\n        '400': {description: Invalid}\n  /auth/login:\n    post:\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              properties:\n                email: {type: string}\n                password: {type: string}\n      responses:\n        '200': {description: OK}\n        '401': {description: Unauthorized}\n        '423': {description: Locked}\n  /auth/logout:\n    post:\n      responses:\n        '204': {description: Logged out}\n  /auth/password-reset:\n    post:\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              properties:\n                email: {type: string}\n      responses:\n        '200': {description: Email sent}\n  /auth/password-reset/confirm:\n    post:\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              properties:\n                token: {type: string}\n                newPassword: {type: string}\n      responses:\n        '200': {description: OK}\n  /tasks:\n    get:\n      parameters:\n        - {name: categoryId, in: query, schema: {type: string}}\n        - {name: dueFrom, in: query, schema: {type: string}}\n        - {name: dueTo, in: query, schema: {type: string}}\n      responses:\n        '200': {description: OK}\n    post:\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              required: [title]\n              properties:\n                title: {type: string}\n                description: {type: string}\n                dueDate: {type: string}\n                categoryId: {type: string}\n      responses:\n        '201': {description: Created}\n  /tasks/{id}:\n    put:\n      parameters: [{name: id, in: path, required: true, schema: {type: string}}]\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema: {type: object}\n      responses:\n        '200': {description: OK}\n    delete:\n      parameters: [{name: id, in: path, required: true, schema: {type: string}}]\n      responses:\n        '204': {description: Deleted}\n  /tasks/{id}/complete:\n    post:\n      parameters: [{name: id, in: path, required: true, schema: {type: string}}]\n      responses:\n        '200': {description: OK}\n  /tasks/{id}/incomplete:\n    post:\n      parameters: [{name: id, in: path, required: true, schema: {type: string}}]\n      responses:\n        '200': {description: OK}\n  /categories:\n    get:\n      responses:\n        '200': {description: OK}\n    post:\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              required: [name]\n              properties:\n                name: {type: string}\n      responses:\n        '201': {description: Created}\n        '409': {description: Duplicate}\n  /categories/{id}:\n    put:\n      parameters: [{name: id, in: path, required: true, schema: {type: string}}]\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              properties: {name: {type: string}}\n      responses:\n        '200': {description: OK}\n    delete:\n      parameters: [{name: id, in: path, required: true, schema: {type: string}}]\n      responses:\n        '204': {description: Deleted}\n",
+          "dependencies": []
+        }
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "Frontend Web App",
+      "description": "Build the React SPA that consumes task-api. Depends on the backend's API contract being available.",
+      "components": [
+        {
+          "name": "task-web",
+          "componentType": "web-app",
+          "language": "TypeScript / React",
+          "deployment": "Docker",
+          "responsibilities": [
+            "Provide Login, Register, Password Reset, Dashboard, and Categories pages with responsive layout",
+            "Call task-api with credentialed fetch for auth, task, and category CRUD operations",
+            "Display tasks with due-date, days-remaining, overdue flagging, and filter controls",
+            "Support full keyboard navigation with visible focus and \u003c200ms optimistic UI feedback",
+            "Serve a /health endpoint from nginx and support runtime API URL configuration"
+          ],
+          "architectureContext": "React+Vite SPA served by nginx on port 8080. Sole consumer of task-api, communicating over HTTPS/JSON with session cookies (credentials:'include').",
+          "keyConsiderations": [
+            "Multi-stage Dockerfile (node build → nginx:alpine) and inject VITE_API_URL via build arg or runtime /config.js",
+            "Handle 401/423 responses with clear inline error messages and lockout notices",
+            "Implement optimistic updates with rollback on failure for \u003c200ms perceived feedback",
+            "Ensure accessibility: tab order, Enter submits, Esc cancels modals, visible focus rings",
+            "Either configure nginx /api proxy for same-origin or rely on backend CORS with credentials"
+          ],
+          "apiContract": "openapi: 3.0.3\ninfo:\n  title: Task Web UI\n  version: 1.0.0\npaths:\n  /health:\n    get:\n      responses:\n        '200': {description: OK}\n",
+          "dependencies": [
+            "task-api"
+          ]
+        }
+      ]
+    }
+  ],
+  "sourceSpec": "spec-v1",
+  "sourceDesign": "design-v1"
+}
